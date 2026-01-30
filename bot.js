@@ -1,74 +1,88 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder } = require('discord.js');
-const sqlite3 = require('sqlite3').verbose();
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
 
-// Setup database
-const db = new sqlite3.Database('./data/database.db');
-
-// Create tables
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS config (
-    guild_id TEXT PRIMARY KEY,
-    ignored_words TEXT DEFAULT '[]',
-    admin_roles TEXT DEFAULT '[]'
-  )`);
-  
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT
-  )`);
-});
-
+// Create Discord client
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
 });
 
-// Cleanup command
-const cleanupCommand = {
-  data: new SlashCommandBuilder()
-    .setName('cleanup')
-    .setDescription('Delete messages')
-    .addIntegerOption(opt => opt.setName('limit').setDescription('Messages to check').setMaxValue(100)),
-  
-  async execute(interaction) {
-    if (!interaction.member.permissions.has('ADMINISTRATOR')) {
-      return interaction.reply({ content: '❌ Admin only!', ephemeral: true });
-    }
-    
-    const limit = interaction.options.getInteger('limit') || 50;
-    
-    const messages = await interaction.channel.messages.fetch({ limit });
-    let deleted = 0;
-    
-    for (const [id, msg] of messages) {
-      if (msg.author.bot) continue;
-      await msg.delete();
-      deleted++;
-    }
-    
-    interaction.reply({ content: `✅ Deleted ${deleted} messages`, ephemeral: true });
-  }
+// Store bot stats for dashboard
+global.botStats = {
+    uptime: Date.now(),
+    guilds: 0,
+    users: 0,
+    commands: 0,
+    messages: 0
 };
 
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  
-  // Register command
-  const commands = [cleanupCommand.data.toJSON()];
-  await client.application.commands.set(commands);
+// Commands collection
+client.commands = new Collection();
+
+// Bot ready event
+client.once('ready', () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    console.log(`🌐 Serving ${client.guilds.cache.size} servers`);
+    console.log(`👥 ${client.users.cache.size} users cached`);
+    
+    // Update stats
+    updateBotStats();
+    
+    // Update stats every 30 seconds
+    setInterval(updateBotStats, 30000);
 });
 
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isCommand()) return;
-  
-  if (interaction.commandName === 'cleanup') {
-    await cleanupCommand.execute(interaction);
-  }
+// Update bot statistics
+function updateBotStats() {
+    botStats.guilds = client.guilds.cache.size;
+    botStats.users = client.users.cache.size;
+    botStats.uptime = Date.now() - botStats.uptime;
+}
+
+// Message handler
+client.on('messageCreate', async (message) => {
+    // Ignore bot messages
+    if (message.author.bot) return;
+    
+    // Increment message counter
+    botStats.messages++;
+    
+    // Basic ping command
+    if (message.content === '!ping') {
+        const latency = Date.now() - message.createdTimestamp;
+        message.reply(`🏓 Pong! Latency: ${latency}ms`);
+        botStats.commands++;
+    }
+    
+    // Stats command
+    if (message.content === '!stats') {
+        const uptime = Math.floor(botStats.uptime / 1000);
+        const hours = Math.floor(uptime / 3600);
+        const minutes = Math.floor((uptime % 3600) / 60);
+        
+        message.reply(`
+📊 **Bot Statistics:**
+• Servers: ${botStats.guilds}
+• Users: ${botStats.users}
+• Commands: ${botStats.commands}
+• Messages: ${botStats.messages}
+• Uptime: ${hours}h ${minutes}m
+        `);
+        botStats.commands++;
+    }
+    
+    // Dashboard info
+    if (message.content === '!dashboard') {
+        message.reply(`🌐 Dashboard: ${process.env.DASHBOARD_URL || 'Not deployed yet'}`);
+    }
 });
 
+// Login to Discord
 client.login(process.env.DISCORD_TOKEN);
+
+// Export for dashboard access
+module.exports = { client, botStats };
